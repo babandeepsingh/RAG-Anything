@@ -2033,17 +2033,20 @@ class ProcessorMixin:
             self.logger.error(f"Error processing document {file_path}: {str(e)}")
             self.logger.debug("Exception details:", exc_info=True)
 
-            # Update doc status to Failed
-            await self.lightrag.doc_status.upsert(
-                {
-                    doc_pre_id: {
-                        **current_doc_status,
-                        "status": DocStatus.FAILED,
-                        "error_msg": str(e),
+            # Update doc status to Failed — guard against lightrag not being initialized
+            if self.lightrag is not None:
+                await self.lightrag.doc_status.upsert(
+                    {
+                        doc_pre_id: {
+                            **current_doc_status,
+                            "status": DocStatus.FAILED,
+                            "error_msg": str(e),
+                        }
                     }
-                }
-            )
-            await self.lightrag.doc_status.index_done_callback()
+                )
+                await self.lightrag.doc_status.index_done_callback()
+            else:
+                await mark_initialization_failed(str(e))
 
             # Update pipeline status
             if pipeline_status_lock and pipeline_status:
@@ -2203,10 +2206,6 @@ class ProcessorMixin:
                     duration_seconds=insert_duration,
                     doc_id=doc_id,
                 )
-        else:
-            # file_ref was resolved before insertion so doc_status can be initialized early
-            pass
-
         # Step 3: Process multimodal content (using specialized processors)
         if multimodal_items:
             await self._process_multimodal_content(multimodal_items, file_ref, doc_id)

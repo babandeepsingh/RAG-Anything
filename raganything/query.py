@@ -383,41 +383,42 @@ class QueryMixin:
 
         self.logger.info(f"Executing VLM enhanced query: {query[:100]}...")
 
-        # Clear previous image cache
-        if hasattr(self, "_current_images_base64"):
-            delattr(self, "_current_images_base64")
+        try:
+            # 1. Get original retrieval prompt (without generating final answer)
+            query_param = QueryParam(mode=mode, only_need_prompt=True, **kwargs)
+            raw_prompt = await self.lightrag.aquery(query, param=query_param)
 
-        # 1. Get original retrieval prompt (without generating final answer)
-        query_param = QueryParam(mode=mode, only_need_prompt=True, **kwargs)
-        raw_prompt = await self.lightrag.aquery(query, param=query_param)
+            self.logger.debug("Retrieved raw prompt from LightRAG")
 
-        self.logger.debug("Retrieved raw prompt from LightRAG")
-
-        # 2. Extract and process image paths
-        enhanced_prompt, images_found = await self._process_image_paths_for_vlm(
-            raw_prompt, extra_safe_dirs=extra_safe_dirs
-        )
-
-        if not images_found:
-            self.logger.info("No valid images found, falling back to normal query")
-            # Fallback to normal query
-            query_param = QueryParam(mode=mode, **kwargs)
-            return await self.lightrag.aquery(
-                query, param=query_param, system_prompt=system_prompt
+            # 2. Extract and process image paths (sets self._current_images_base64)
+            enhanced_prompt, images_found = await self._process_image_paths_for_vlm(
+                raw_prompt, extra_safe_dirs=extra_safe_dirs
             )
 
-        self.logger.info(f"Processed {images_found} images for VLM")
+            if not images_found:
+                self.logger.info("No valid images found, falling back to normal query")
+                # Fallback to normal query
+                query_param = QueryParam(mode=mode, **kwargs)
+                return await self.lightrag.aquery(
+                    query, param=query_param, system_prompt=system_prompt
+                )
 
-        # 3. Build VLM message format
-        messages = self._build_vlm_messages_with_images(
-            enhanced_prompt, query, system_prompt
-        )
+            self.logger.info(f"Processed {images_found} images for VLM")
 
-        # 4. Call VLM for question answering
-        result = await self._call_vlm_with_multimodal_content(messages)
+            # 3. Build VLM message format
+            messages = self._build_vlm_messages_with_images(
+                enhanced_prompt, query, system_prompt
+            )
 
-        self.logger.info("VLM enhanced query completed")
-        return result
+            # 4. Call VLM for question answering
+            result = await self._call_vlm_with_multimodal_content(messages)
+
+            self.logger.info("VLM enhanced query completed")
+            return result
+        finally:
+            # Always release cached base64 image data to avoid memory retention
+            if hasattr(self, "_current_images_base64"):
+                delattr(self, "_current_images_base64")
 
     async def _process_multimodal_query_content(
         self, base_query: str, multimodal_content: List[Dict[str, Any]]
